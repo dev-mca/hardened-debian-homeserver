@@ -78,6 +78,7 @@ A larger diagram is in [docs/02-architecture.md](docs/02-architecture.md).
 - A scan from inside the LAN and a UDP scan, and repeated external scans.
 - A second Lynis measurement after the next round of measures.
 - A RAM upgrade.
+- A step-by-step guide to reproduce the setup on a fresh Debian install, with a reuse checklist and a generic sudo-allowlist template for AI agents.
 
 ### Considered, not needed
 
