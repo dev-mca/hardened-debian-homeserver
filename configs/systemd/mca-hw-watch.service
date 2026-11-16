@@ -1,0 +1,15 @@
+[Unit]
+Description=Hardware watch (power loss, battery, CPU temperature, Wi-Fi) with push alerts
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/local/sbin/mca-hw-watch
+Restart=always
+RestartSec=5
+Nice=10
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

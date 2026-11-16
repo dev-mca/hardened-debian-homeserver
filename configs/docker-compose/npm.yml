@@ -1,0 +1,15 @@
+# Sanitized copy of ~/docker/npm/docker-compose.yml (Nginx Proxy Manager).
+# Ports 80/443/81 are published by Docker, but the DOCKER-USER firewall block limits them to the LAN
+# (see configs/ufw/docker-user-block.rules).
+services:
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'   # tag not pinned
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - '80:80'       # HTTP (LAN only through the firewall)
+      - '81:81'       # NPM admin UI (LAN only)
+      - '443:443'     # HTTPS (LAN only)
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt

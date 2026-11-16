@@ -1,0 +1,16 @@
+# Sanitized copy of ~/docker/ocis/docker-compose.yml (ownCloud Infinite Scale, personal cloud storage).
+# Host networking: oCIS listens directly on port 9200. The firewall allows 9200 only from the LAN
+# and from Docker networks (so the reverse proxy can reach it); Tailscale clients are allowed too.
+services:
+  ocis:
+    image: owncloud/ocis:latest   # tag not pinned
+    container_name: ocis
+    network_mode: host
+    environment:
+      - OCIS_URL=https://192.0.2.10:9200
+      - OCIS_INSECURE=true      # self-signed certificate on the LAN address
+      - DEMO_USERS=false
+    volumes:
+      - ./ocis-data:/var/lib/ocis
+      - ./ocis-config:/etc/ocis   # contains ocis.yaml with internal service secrets: never copy it into a repo
+    restart: always

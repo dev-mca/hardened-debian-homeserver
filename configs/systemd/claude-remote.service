@@ -1,0 +1,19 @@
+# Persistent Claude Code Remote Control. Runs as the dedicated, non-login account "claude".
+[Unit]
+Description=Claude Code Remote Control
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=claude
+Group=claude
+WorkingDirectory=/home/claude/<WORKDIR>
+Environment=HOME=/home/claude
+Environment=PATH=/home/claude/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/claude/.local/bin/claude remote-control --name <HOST> --permission-mode auto
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

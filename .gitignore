@@ -1,0 +1,40 @@
+# Secrets and credentials. Never commit these.
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+id_*
+authorized_keys
+secrets/
+restic-password*
+*.token
+*credentials*
+
+# Logs, raw reports and dumps
+*.log
+*.dat
+*.pcap
+
+# Backups and backup copies
+backups/
+*.bak
+*.bak-*
+*.bak[0-9]*
+*.orig
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Editor and OS files
+*~
+*.swp
+.DS_Store
+
+# Local list of real values for scripts/check-secrets.sh (never commit)
+.private-patterns

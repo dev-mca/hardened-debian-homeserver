@@ -1,0 +1,23 @@
+# Sanitized copy of ~/docker/pihole/docker-compose.yml.
+# The real file uses the same pattern: it only references the variable below. The value lives in a
+# local .env file (mode 600, not in this repo). The compose file is mode 600 as well.
+# Before 2026-11-15 the real file contained the password in plain text (see docs/03 H5).
+services:
+  pihole:
+    container_name: pihole
+    image: pihole/pihole:latest   # tag not pinned
+    ports:
+      - "53:53/tcp"      # DNS (LAN only through the firewall)
+      - "53:53/udp"
+      - "8080:80/tcp"    # web UI (LAN only)
+    environment:
+      TZ: '<TIMEZONE>'   # same zone as the host (aligned 2026-11-15)
+      FTLCONF_webserver_api_password: ${PIHOLE_WEB_PASSWORD}
+      FTLCONF_dns_listeningMode: 'ALL'   # needed with Docker's default bridge network, also answers Tailscale clients
+    volumes:
+      - './etc-pihole:/etc/pihole'
+    cap_add:
+      - NET_ADMIN
+      - SYS_TIME
+      - SYS_NICE
+    restart: unless-stopped

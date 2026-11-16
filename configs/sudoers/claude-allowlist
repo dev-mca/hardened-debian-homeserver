@@ -1,0 +1,75 @@
+# /etc/sudoers.d/claude-allowlist   (installed 2026-11-15, mode 0440, root:root)
+# Sanitized copy: the real home directory name is shown as <USER>.
+# Replaces the old blanket rule "claude ALL=(ALL) NOPASSWD: ALL" (file 90-claude, removed).
+# Rules: absolute paths, exact arguments, no wildcards, runas root only.
+# A command without arguments would allow ANY arguments, so every entry below lists its arguments in full.
+# Never add: shells, editors, pagers, find, tee, cp/mv/chmod/chown, docker run/exec with free arguments,
+# systemctl edit/enable/daemon-reload, apt-get install, restic restore, anything that runs another program.
+
+Defaults:claude env_reset, !setenv, use_pty
+
+# ---------------------------------------------------------------- READ-ONLY (exact commands; the NOEXEC tag on this group is not counted as protection)
+Cmnd_Alias CLAUDE_READ = \
+    /usr/sbin/iptables -S, \
+    /usr/sbin/iptables -S DOCKER-USER, \
+    /usr/sbin/ip6tables -S, \
+    /usr/sbin/nft list ruleset, \
+    /usr/bin/ss -tulnp, \
+    /usr/sbin/sshd -T, \
+    /usr/bin/docker ps, \
+    /usr/bin/docker ps -a, \
+    /usr/bin/docker logs --tail 200 duckdns, \
+    /usr/bin/docker logs --tail 200 minecraft, \
+    /usr/bin/docker logs --tail 200 minecraft-backup, \
+    /usr/bin/docker logs --tail 200 npm, \
+    /usr/bin/docker logs --tail 200 ocis, \
+    /usr/bin/docker logs --tail 200 pihole, \
+    /usr/bin/docker exec minecraft rcon-cli list, \
+    /usr/bin/docker exec minecraft rcon-cli whitelist list, \
+    /usr/bin/docker exec npm nginx -t, \
+    /usr/bin/journalctl -u claude-remote.service --no-pager -n 200, \
+    /usr/bin/journalctl -u mca-hw-watch.service --no-pager -n 200, \
+    /usr/bin/journalctl -u mca-backup.service --no-pager -n 200, \
+    /usr/bin/journalctl -u ssh.service --no-pager -n 200, \
+    /usr/bin/journalctl -u netdata.service --no-pager -n 200, \
+    /usr/bin/journalctl -u tailscaled.service --no-pager -n 200, \
+    /usr/bin/journalctl -t mca-alert --no-pager -n 200, \
+    /usr/bin/journalctl -t mca-backup --no-pager -n 200, \
+    /usr/bin/journalctl -k --no-pager -n 200, \
+    /usr/bin/systemctl status claude-remote.service --no-pager, \
+    /usr/bin/systemctl status mca-hw-watch.service --no-pager, \
+    /usr/bin/systemctl status mca-backup.service --no-pager, \
+    /usr/bin/systemctl status mca-backup.timer --no-pager, \
+    /usr/bin/systemctl status netdata.service --no-pager, \
+    /usr/bin/systemctl status ssh.service --no-pager, \
+    /usr/bin/systemctl status tailscaled.service --no-pager, \
+    /usr/bin/systemctl status docker.service --no-pager, \
+    /usr/bin/cat /home/<USER>/docker/duckdns/docker-compose.yml, \
+    /usr/bin/cat /home/<USER>/docker/minecraft/docker-compose.yml, \
+    /usr/bin/cat /home/<USER>/docker/npm/docker-compose.yml, \
+    /usr/bin/cat /home/<USER>/docker/ocis/docker-compose.yml, \
+    /usr/bin/cat /var/log/lynis-report.dat, \
+    /usr/sbin/smartctl -H /dev/sda, \
+    /usr/sbin/smartctl -H /dev/nvme0n1
+
+claude ALL=(root) NOPASSWD: NOEXEC: CLAUDE_READ
+
+# ufw is a Python script that starts iptables itself, so it needs its own group without the NOEXEC tag.
+# Still read-only and exact: only these two commands.
+Cmnd_Alias CLAUDE_READ_UFW = \
+    /usr/sbin/ufw status verbose, \
+    /usr/sbin/ufw status numbered
+
+claude ALL=(root) NOPASSWD: CLAUDE_READ_UFW
+
+# ---------------------------------------------------------------- STATE-CHANGING (exact commands only)
+Cmnd_Alias CLAUDE_CHANGE = \
+    /usr/bin/systemctl restart mca-hw-watch.service, \
+    /usr/bin/systemctl restart netdata.service, \
+    /usr/bin/systemctl start mca-backup.service, \
+    /usr/bin/docker restart minecraft, \
+    /usr/bin/docker restart ocis, \
+    /usr/bin/docker restart duckdns, \
+    /usr/bin/docker start ocis
+
+claude ALL=(root) NOPASSWD: CLAUDE_CHANGE

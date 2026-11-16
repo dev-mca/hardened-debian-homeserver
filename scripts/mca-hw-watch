@@ -1,0 +1,84 @@
+#!/bin/bash
+# mca-hw-watch: watches power loss, battery level, CPU temperature and Wi-Fi/router.
+# It reports through mca-alert (journal, push, sound only in emergencies, never in quiet hours)
+# and sends "mca.on_battery" (0/1) as a statsd gauge to Netdata (dashboard).
+# The power-loss alert comes only after POWER_GRACE seconds (default 60): a short unplug stays silent.
+# Levels: power loss = push only; after 15 min (REMIND_ON_BATTERY) also sound on the laptop (power-loss-long), never at night.
+# It also re-sends undelivered push messages (mca-alert --flush) and pings an optional dead man's switch (HC_PING_URL).
+[ -r /etc/default/mca-alert ] && . /etc/default/mca-alert
+AC=${MCA_AC_FILE:-/sys/class/power_supply/ACAD/online}
+BATD=${MCA_BAT_DIR:-/sys/class/power_supply/BAT1}
+ALERT=${MCA_ALERT_CMD:-/usr/local/sbin/mca-alert}
+POLL=${MCA_POLL:-2}
+STATSD=${MCA_STATSD:-1}
+REMIND=${REMIND_ON_BATTERY:-300}
+GRACE=${POWER_GRACE:-60}
+SPOOLDIR=${MCA_SPOOL:-/var/spool/mca-alert}
+HC_INTERVAL=${HC_INTERVAL:-300}
+TEMP_CRIT=${TEMP_CRIT:-92}
+WIFI_LEVEL=${WIFI_ALERT_LEVEL:-info}
+GW=${WIFI_GATEWAY:-192.0.2.1}   # set the real router address in the alert settings file
+
+statsd() { [ "$STATSD" = 1 ] && printf '%s:%s|g' "$1" "$2" > /dev/udp/127.0.0.1/8125 2>/dev/null; return 0; }
+cap()    { cat "$BATD/capacity" 2>/dev/null || echo "?"; }
+tempfile=""; for h in /sys/class/hwmon/hwmon*; do [ "$(cat $h/name 2>/dev/null)" = k10temp ] && tempfile=$h/temp1_input; done
+
+prev=$(cat "$AC" 2>/dev/null || echo 1)
+statsd mca.on_battery $((1-prev))
+t=0; last_hc=-100000; off_since=$SECONDS; alerted=0; last_remind=0; low1=0; low2=0; hot=0; hot_sent=0; wfail=0; wdown=0
+echo "mca-hw-watch started: AC=$prev, battery $(cap) %, temperature source=${tempfile:-none}, grace ${GRACE}s"
+while true; do
+  cur=$(cat "$AC" 2>/dev/null || echo "$prev")
+  if [ "$cur" != "$prev" ]; then
+    sleep "$POLL"; cur2=$(cat "$AC" 2>/dev/null || echo "$prev")      # debounce: the value must stay stable
+    if [ "$cur2" = "$cur" ]; then
+      prev=$cur; statsd mca.on_battery $((1-cur))
+      if [ "$cur" = 0 ]; then
+        off_since=$SECONDS; alerted=0; low1=0; low2=0
+        "$ALERT" info "Mains power lost (battery $(cap) %), alert only after ${GRACE} s"
+      else
+        if [ $alerted = 1 ]; then "$ALERT" power-back "Power is back (battery $(cap) %)"
+        else "$ALERT" info "Mains power back after $((SECONDS-off_since)) s, no alert"; fi
+        alerted=0
+      fi
+    fi
+  fi
+  if [ "$prev" = 0 ]; then
+    if [ $alerted = 0 ] && [ $((SECONDS-off_since)) -ge "$GRACE" ]; then
+      alerted=1; last_remind=$SECONDS
+      "$ALERT" power-loss "Power outage for ${GRACE} s: server is running on battery ($(cap) %)"
+    fi
+    if [ $alerted = 1 ]; then
+      c=$(cap)
+      if [[ "$c" =~ ^[0-9]+$ ]]; then
+        if [ "$c" -le 10 ] && [ $low2 = 0 ]; then low2=1; low1=1
+          "$ALERT" crit "Battery almost empty ($c %). The server does NOT shut down automatically."
+        elif [ "$c" -le 20 ] && [ $low1 = 0 ]; then low1=1
+          "$ALERT" warn "Battery at $c % (power outage)"
+        fi
+      fi
+      if [ $((SECONDS-last_remind)) -ge "$REMIND" ]; then last_remind=$SECONDS; "$ALERT" power-loss-long "Power outage for $(( (SECONDS-off_since)/60 )) min, battery $(cap) %"; fi
+    fi
+  fi
+  if [ $((t%10)) -lt "$POLL" ]; then                                    # about every 10 s
+    statsd mca.on_battery $((1-prev))
+    if [ "$(cat /etc/mca-alerts-master 2>/dev/null)" = off ]; then statsd mca.alerts_on 0; else statsd mca.alerts_on 1; fi   # master switch state for the phone dashboard
+    # Re-send push messages that could not be delivered (Wi-Fi outage).
+    ls "$SPOOLDIR"/*.msg >/dev/null 2>&1 && "$ALERT" --flush
+    # Dead man's switch: heartbeat to healthchecks.io (only if HC_PING_URL is set).
+    if [ -n "${HC_PING_URL:-}" ] && [ $((SECONDS-last_hc)) -ge "$HC_INTERVAL" ]; then last_hc=$SECONDS; curl -fsS -m 10 --retry 2 -o /dev/null "$HC_PING_URL" >/dev/null 2>&1 & fi
+    # Age of the last successful backup in hours (999 = never), used by the Netdata alarm mca_backup_age.
+    if [ -r /var/lib/mca-backup/last_success ]; then bk=$(cat /var/lib/mca-backup/last_success 2>/dev/null); statsd mca.backup_age_h $(( ($(date +%s) - ${bk:-0}) / 3600 )); else statsd mca.backup_age_h 999; fi
+    if [ -n "$tempfile" ]; then
+      tc=$(( $(cat "$tempfile" 2>/dev/null || echo 0) / 1000 ))
+      if [ "$tc" -ge "$TEMP_CRIT" ]; then hot=$((hot+1)); else [ "$tc" -lt $((TEMP_CRIT-5)) ] && { hot=0; hot_sent=0; }; fi
+      if [ $hot -ge 3 ] && [ $hot_sent = 0 ]; then hot_sent=1; "$ALERT" crit "CPU overheating: ${tc} C for 30 s"; fi
+    fi
+    if ping -c1 -W2 "$GW" >/dev/null 2>&1; then
+      [ $wdown = 1 ] && { "$ALERT" info "Wi-Fi/router reachable again ($GW)"; wdown=0; }; wfail=0
+    else
+      wfail=$((wfail+1)); [ $wfail -ge 9 ] && [ $wdown = 0 ] && { wdown=1; "$ALERT" "$WIFI_LEVEL" "Wi-Fi/router $GW not reachable for 90 s"; }
+    fi
+  fi
+  sleep "$POLL"; t=$((t+POLL))
+done

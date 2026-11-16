@@ -1,0 +1,14 @@
+# Sanitized copy of ~/docker/duckdns/docker-compose.yml.
+# Keeps the dynamic DNS name pointing at the current home IPv4 address (checks every 5 minutes).
+# The token comes from a local .env file (mode 600, not in this repo).
+services:
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest   # tag not pinned
+    container_name: duckdns
+    environment:
+      SUBDOMAINS: "<DDNS_HOST>"
+      TOKEN: "${DUCKDNS_TOKEN}"
+      UPDATE_IP: "ipv4"
+      TZ: "<TIMEZONE>"
+      LOG_FILE: "false"
+    restart: unless-stopped

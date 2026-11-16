@@ -1,0 +1,17 @@
+# The running Minecraft world is NOT backed up raw (it would be inconsistent).
+# The consistent archives from the minecraft-backup container (docker/minecraft/backups) are included instead.
+/home/<USER>/docker/minecraft/data/world*
+/home/<USER>/docker/minecraft/data/libraries
+/home/<USER>/docker/minecraft/data/versions
+/home/<USER>/docker/minecraft/data/cache
+/home/<USER>/docker/minecraft/data/logs
+/home/<USER>/docker/minecraft/data/.cache
+/home/<USER>/docker/minecraft/data/.paper
+/home/<USER>/docker/minecraft/data/*.jar
+# Claude Code: program files, caches and credentials are not backed up (the login can be redone).
+/home/claude/.local
+/home/claude/.cache
+/home/claude/.claude/.credentials.json
+/home/claude/.claude.json
+# Deploy key for the GitHub repository (private key only; config, known_hosts and the .pub file stay in the backup).
+/home/claude/.ssh/id_ed25519_github_homeserver

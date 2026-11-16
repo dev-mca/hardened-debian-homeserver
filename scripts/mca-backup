@@ -1,0 +1,56 @@
+#!/bin/bash
+# mca-backup: encrypted, versioned backup (restic) to the external SSD at /mnt/backup.
+# The oCIS data folder is backed up while oCIS is stopped for a short time (consistent copy).
+# Everything else is backed up live.
+# Usage: mca-backup [--maintenance]
+#   --maintenance = prune old snapshots and verify a sample of the data (runs automatically on Sundays).
+export RESTIC_REPOSITORY=/mnt/backup/restic
+export RESTIC_PASSWORD_FILE=/root/.config/mca-backup/restic-password
+export RESTIC_CACHE_DIR=/var/cache/restic
+STATE=/var/lib/mca-backup; EXCL=/etc/mca-backup.exclude; HOST=homeserver
+mkdir -p "$STATE" /var/backups/mca-state
+log()  { echo "$(date '+%F %T') $*"; logger -t mca-backup -- "$*"; }
+fail() { log "ERROR: $*"; date +%s > "$STATE/last_failure"; /usr/local/sbin/mca-alert warn "Backup failed: $*"; exit 1; }
+
+# Only one run at a time.
+exec 8>"$STATE/lock"; flock -n 8 || { log "already running, aborting"; exit 0; }
+
+# Safety checks before writing anything.
+mountpoint -q /mnt/backup           || fail "backup SSD is not mounted"
+[ -f /mnt/backup/.mca-backup-disk ] || fail "marker file missing on the SSD (wrong disk?)"
+restic cat config >/dev/null 2>&1   || fail "restic repository not readable (password or disk?)"
+used=$(df --output=pcent /mnt/backup | tail -1 | tr -dc 0-9); [ "${used:-100}" -lt 92 ] || fail "backup SSD too full (${used} %)"
+
+OCIS_RUNNING=$(docker inspect -f '{{.State.Running}}' ocis 2>/dev/null || echo false)
+start_ocis() { if [ "$OCIS_RUNNING" = true ]; then docker start ocis >/dev/null 2>&1 && OCIS_RUNNING=done; fi; }
+trap start_ocis EXIT                 # oCIS is always started again, even if something fails
+
+# Save a text snapshot of the system state (goes into the backup, helps with a rebuild).
+{ date; echo "== docker ps -a"; docker ps -a --format '{{.Names}} | {{.Image}} | {{.Status}}'; echo "== ufw"; ufw status verbose
+  echo "== ip"; ip -br addr; echo "== enabled units"; systemctl list-unit-files --state=enabled --no-pager
+  echo "== lsblk"; lsblk -f; echo "== fstab"; cat /etc/fstab; echo "== dpkg"; dpkg --get-selections; } > /var/backups/mca-state/state.txt 2>&1
+
+# 1) oCIS: back up while stopped (consistent).
+if [ "$OCIS_RUNNING" = true ]; then log "stopping oCIS for a consistent backup"; docker stop -t 60 ocis >/dev/null || fail "could not stop oCIS"; fi
+restic backup /home/<USER>/docker/ocis --tag ocis --host "$HOST" --quiet; rc1=$?
+start_ocis; [ "$OCIS_RUNNING" = done ] && log "oCIS started again"
+[ $rc1 -eq 0 ] || fail "restic (oCIS) exit code $rc1"
+
+# 2) Everything else: live.
+restic backup /home/<USER>/docker /home/<USER>/.ssh /home/<USER>/CLAUDE.md /etc /usr/local /var/lib/tailscale \
+  /var/backups/mca-state /home/claude /root/.android \
+  --exclude-file="$EXCL" --exclude /home/<USER>/docker/ocis --tag system --host "$HOST" --quiet; rc2=$?
+[ $rc2 -eq 0 ] || [ $rc2 -eq 3 ] || fail "restic (system) exit code $rc2"
+[ $rc2 -eq 3 ] && log "note: some files were unreadable or vanished (exit code 3)"
+date +%s > "$STATE/last_success"
+
+# Weekly maintenance: prune, sample check, SMART check of the backup SSD.
+if [ "$(date +%u)" = 7 ] || [ "${1:-}" = --maintenance ]; then
+  restic forget --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --keep-yearly 3 --prune --quiet || fail "forget/prune failed"
+  restic check --read-data-subset=5% --quiet                                                       || fail "restic check reports errors"
+  dev="/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /mnt/backup)" 2>/dev/null | head -1)"
+  if smartctl -H -d sat "$dev" 2>/dev/null | grep -q PASSED; then log "SMART of the backup SSD: PASSED"
+  else /usr/local/sbin/mca-alert warn "SMART of the backup SSD did not report PASSED ($dev)"; fi
+  log "maintenance ok (old snapshots pruned, 5 % of the data verified)"
+fi
+log "backup ok"

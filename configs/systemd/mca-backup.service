@@ -1,0 +1,11 @@
+[Unit]
+Description=Backup (restic to the external SSD, oCIS stopped briefly for a consistent copy)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mca-backup
+# Safety net: if the script is killed, oCIS still comes back up.
+ExecStopPost=-/usr/bin/docker start ocis
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=6h

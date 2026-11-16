@@ -1,0 +1,75 @@
+#!/bin/bash
+# Usage: mca-alert <info|warn|crit|power-loss|power-loss-long|power-back> "message"      |      mca-alert --flush
+# - Journal (tag mca-alert): always.
+# - Push to the owner's phone (ntfy app, topic from /etc/default/mca-alert): every level except info.
+#   Messages that cannot be delivered (Wi-Fi outage) go to a spool folder and are re-sent with "mca-alert --flush".
+# - Sound on the laptop speaker ONLY in emergencies: crit and power-loss-long (power outage > 15 min).
+#   Never during quiet hours (QUIET_START..QUIET_END).
+# Dry-run options: MCA_ALERT_DRYRUN=1 (only prints the decision), MCA_HOUR=<0-23>, MCA_ALERT_NOSOUND=1, MCA_ALERT_NOPUSH=1
+[ -r /etc/default/mca-alert ] && . /etc/default/mca-alert
+VOLUME=${VOLUME:-50}; QUIET_START=${QUIET_START:-23}; QUIET_END=${QUIET_END:-6}
+NTFY_URL=${NTFY_URL:-https://ntfy.sh}; SPOOL=${MCA_SPOOL:-/var/spool/mca-alert}
+DRY=${MCA_ALERT_DRYRUN:-0}
+
+send_one() {  # $1 priority, $2 title, $3 tags, $4 message ; returns 0 if delivered
+  printf '%s' "$4" | curl -fsS -m 10 -o /dev/null -H "Title: $2" -H "Priority: $1" -H "Tags: $3" --data-binary @- "$NTFY_URL/$NTFY_TOPIC" 2>/dev/null
+}
+spool_add() {  # $1 priority, $2 title, $3 tags, $4 message
+  mkdir -p "$SPOOL"; chmod 700 "$SPOOL"
+  [ "$(ls "$SPOOL" 2>/dev/null | wc -l)" -ge 30 ] && ls -1tr "$SPOOL"/*.msg 2>/dev/null | head -1 | xargs -r rm -f   # keep at most 30 entries
+  f="$SPOOL/$(date +%s)-$RANDOM.msg"; { echo "$1"; echo "$2"; echo "$3"; echo "$(date +%s)"; printf '%s\n' "$4"; } > "$f"
+}
+flush() {
+  [ -n "${NTFY_TOPIC:-}" ] || exit 0
+  mkdir -p "$SPOOL"; exec 7>"$SPOOL/.lock"; flock -n 7 || exit 0
+  now=$(date +%s)
+  for f in $(ls -1tr "$SPOOL"/*.msg 2>/dev/null); do
+    { read -r prio; read -r title; read -r tags; read -r ts; msg=$(cat); } < "$f"
+    if [ $((now - ts)) -gt 86400 ]; then rm -f "$f"; continue; fi          # older than 24 h: drop
+    if send_one "$prio" "$title" "$tags" "(delayed, originally $(date -d @"$ts" +%H:%M)) $msg"; then rm -f "$f"; else break; fi
+  done
+  exit 0
+}
+[ "${1:-}" = "--flush" ] && flush
+
+level=${1:-info}; shift; msg="$*"
+case $level in
+  warn)            prio=4; title="Server: warning";            tags=warning;               wav="";          jprio=warning;;
+  crit)            prio=5; title="Server: CRITICAL";           tags=rotating_light;        wav=crit;        jprio=crit;;
+  power-loss)      prio=4; title="Server: power outage";       tags=zap;                   wav="";          jprio=crit;;
+  power-loss-long) prio=5; title="Server: power outage continues"; tags=zap,rotating_light; wav=power-loss; jprio=crit;;
+  power-back)      prio=3; title="Server: power is back";      tags=white_check_mark;      wav="";          jprio=notice;;
+  *)               prio="";  title="";                          tags="";                    wav="";          jprio=info;;
+esac
+hour=${MCA_HOUR:-$(date +%-H)}; quiet=0
+if [ "$QUIET_START" -gt "$QUIET_END" ]; then { [ "$hour" -ge "$QUIET_START" ] || [ "$hour" -lt "$QUIET_END" ]; } && quiet=1
+else { [ "$hour" -ge "$QUIET_START" ] && [ "$hour" -lt "$QUIET_END" ]; } && quiet=1; fi
+
+note=""
+if [ -n "$wav" ] && [ "$quiet" = 1 ]; then note=" (quiet hours, no sound)"; fi
+if [ "$DRY" = 1 ]; then echo "LOG[$jprio]: [$level] $msg$note"; else logger -t mca-alert -p "user.$jprio" -- "[$level] $msg$note"; fi
+
+# Push to the phone.
+if [ -n "$prio" ] && [ "${MCA_ALERT_NOPUSH:-0}" != 1 ]; then
+  if [ -z "${NTFY_TOPIC:-}" ]; then [ "$DRY" = 1 ] && echo "PUSH: no topic set, skipped"
+  elif [ "$DRY" = 1 ]; then echo "PUSH: prio=$prio title='$title' tags=$tags text='$msg'"
+  else ( send_one "$prio" "$title" "$tags" "$msg" || spool_add "$prio" "$title" "$tags" "$msg" ) >/dev/null 2>&1 &
+  fi
+elif [ "$DRY" = 1 ]; then echo "PUSH: none (level $level)"; fi
+
+# Sound only in emergencies.
+[ "${MCA_ALERT_NOSOUND:-0}" = 1 ] && exit 0
+if [ -z "$wav" ] || [ ! -f "/usr/local/share/mca-alert/$wav.wav" ]; then [ "$DRY" = 1 ] && echo "SOUND: none (not an emergency level)"; exit 0; fi
+if [ "$quiet" = 1 ]; then [ "$DRY" = 1 ] && echo "SOUND: none (quiet hours)"; exit 0; fi
+if [ "$DRY" = 1 ]; then echo "SOUND: would play $wav.wav at ${VOLUME}%"; exit 0; fi
+# Find the sound card of the internal speaker by its codec name.
+card=""
+for f in /proc/asound/card*/codec#*; do
+  if grep -q 'ALC236' "$f" 2>/dev/null; then card=${f#/proc/asound/card}; card=${card%%/*}; break; fi
+done
+card=${card:-1}
+exec 9>"${MCA_LOCK:-/run/mca-alert.lock}"; flock -w 30 9 || exit 0
+amixer -q -c "$card" -M sset Master "${VOLUME}%" unmute 2>/dev/null
+amixer -q -c "$card" sset Speaker 100% unmute 2>/dev/null
+timeout 20 aplay -q -D "plughw:${card},0" "/usr/local/share/mca-alert/$wav.wav" 2>/dev/null
+exit 0
