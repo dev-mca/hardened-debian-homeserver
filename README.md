@@ -102,7 +102,3 @@ A larger diagram is in [docs/02-architecture.md](docs/02-architecture.md).
 | `configs/`, `scripts/` | Sanitized configs and scripts. See [scripts/README.md](scripts/README.md). |
 
 Every measure in docs 03-08 follows the pattern **Threat (ID) → Solution → Configuration → How verified**.
-
-## Before you publish or reuse anything
-
-Run `scripts/check-secrets.sh` before each commit. Never copy real `.env` files, `ocis.yaml`, restic passwords, ntfy topics or ping URLs into this repository.
